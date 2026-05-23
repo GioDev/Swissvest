@@ -1,0 +1,1308 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { 
+  TrendingUp, 
+  Settings, 
+  HelpCircle, 
+  RefreshCw, 
+  Percent, 
+  Coins, 
+  ShieldAlert, 
+  Sparkles, 
+  ArrowRight, 
+  Sliders, 
+  Info,
+  ChevronRight,
+  ChevronDown,
+  Download,
+  AlertTriangle,
+  FileText,
+  DollarSign
+} from 'lucide-react';
+
+// Define the supported Swiss ETFs
+const SWISS_ETFS = [
+  {
+    id: 'CHSPI',
+    ticker: 'CHSPI',
+    name: 'iShares Core SPI ETF (CH)',
+    isin: 'CH0237935652',
+    assetClass: 'Swiss Equities (Broad)',
+    ter: 0.10, // 0.10% Expense Ratio
+    domicile: 'Switzerland',
+    stampDutyRate: 0.075, // Swiss stamp duty for domestic securities
+    color: '#E31B23', // Swiss Red
+    description: 'Tracks the Swiss Performance Index (SPI), capturing large, mid, and small-cap Swiss companies.'
+  },
+  {
+    id: 'CSSMI',
+    ticker: 'CSSMI',
+    name: 'iShares SMI ETF (CH)',
+    isin: 'CH0008899764',
+    assetClass: 'Swiss Equities (Blue Chip)',
+    ter: 0.20,
+    domicile: 'Switzerland',
+    stampDutyRate: 0.075,
+    color: '#FF6B6B',
+    description: 'Tracks the 20 largest and most liquid blue-chip companies listed on the SIX Swiss Exchange.'
+  },
+  {
+    id: 'IWDC',
+    ticker: 'IWDC',
+    name: 'iShares MSCI World CHF Hedged',
+    isin: 'CH0142270906',
+    assetClass: 'Global Equities (Hedged)',
+    ter: 0.30,
+    domicile: 'Ireland', // Commonly traded via SIX
+    stampDutyRate: 0.150, // Foreign domicile stamp duty
+    color: '#339AF0', // Blue
+    description: 'Delivers global developed market exposure with systematic currency hedging into Swiss Francs (CHF).'
+  },
+  {
+    id: 'CSBGC3',
+    ticker: 'CSBGC3',
+    name: 'iShares Core CHF Corporate Bond',
+    isin: 'CH0142517595',
+    assetClass: 'Swiss Corporate Bonds',
+    ter: 0.15,
+    domicile: 'Switzerland',
+    stampDutyRate: 0.075,
+    color: '#51CF66', // Green
+    description: 'Invests in investment-grade CHF-denominated corporate bonds issued by domestic and foreign entities.'
+  },
+  {
+    id: 'CSGOLD',
+    ticker: 'CSGOLD',
+    name: 'iShares Gold ETF (CH)',
+    isin: 'CH0106027193',
+    assetClass: 'Precious Metals (Gold)',
+    ter: 0.21,
+    domicile: 'Switzerland',
+    stampDutyRate: 0.075,
+    color: '#FCC419', // Gold
+    description: 'Physically backed gold ETF held securely in Swiss high-security vaults, hedged or valued in CHF.'
+  }
+];
+
+// Presets
+const STRATEGY_PRESETS = [
+  {
+    name: 'Swiss Pure Growth',
+    description: '100% allocation to the broad Swiss stock market. Simple, low cost, high domestic bias.',
+    allocations: { CHSPI: 100, CSSMI: 0, IWDC: 0, CSBGC3: 0, CSGOLD: 0 }
+  },
+  {
+    name: 'Swiss Classic 60/40',
+    description: 'Balanced profile with a strong home-country cushion, global diversity, and corporate bonds.',
+    allocations: { CHSPI: 30, CSSMI: 10, IWDC: 20, CSBGC3: 30, CSGOLD: 10 }
+  },
+  {
+    name: 'Global Swiss Pioneer',
+    description: 'Aggressive equity tilt with core Swiss index and substantial global exposure, minor safe-havens.',
+    allocations: { CHSPI: 35, CSSMI: 0, IWDC: 55, CSBGC3: 0, CSGOLD: 10 }
+  },
+  {
+    name: 'Helvetic Defensive',
+    description: 'Prioritizes capital preservation utilizing Swiss Corporate Bonds and Gold vaults.',
+    allocations: { CHSPI: 15, CSSMI: 5, IWDC: 10, CSBGC3: 55, CSGOLD: 15 }
+  }
+];
+
+// Seeded pseudo-random generator for historical fidelity
+function createSeededRandom(seed) {
+  let h = seed ^ 0xDEADBEEF;
+  return function() {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 15) >>> 0) / 4294967296;
+  };
+}
+
+// Generate realistic monthly historical return indices matching Swiss macro cycles (Jan 2018 - May 2026)
+// Total 101 months
+const generateHistoricalReturns = () => {
+  const years = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  const returnsTable = [];
+  let seed = 42;
+  const rand = createSeededRandom(seed);
+
+  let dateCounter = 0;
+  
+  for (const year of years) {
+    for (let mIdx = 0; mIdx < 12; mIdx++) {
+      // Cut off at May 2026
+      if (year === 2026 && mIdx > 4) break;
+      
+      const monthLabel = `${months[mIdx]} ${year}`;
+      
+      // Determine structural modifiers for specific market periods
+      let equityMod = 0;
+      let globalEquityMod = 0;
+      let bondMod = 0;
+      let goldMod = 0;
+
+      if (year === 2018) {
+        // Tightening cycle, trade war. Global markets and Switzerland down.
+        equityMod = -0.008;
+        globalEquityMod = -0.010;
+        bondMod = 0.001;
+        goldMod = 0.003;
+      } else if (year === 2019) {
+        // Phenomenal recovery year
+        equityMod = 0.018;
+        globalEquityMod = 0.021;
+        bondMod = 0.002;
+        goldMod = 0.012;
+      } else if (year === 2020) {
+        // Covid crash and massive rebound
+        if (mIdx === 1 || mIdx === 2) { // Feb, Mar
+          equityMod = -0.085;
+          globalEquityMod = -0.115;
+          bondMod = -0.005;
+          goldMod = 0.035; // Safe haven
+        } else if (mIdx >= 3 && mIdx <= 11) { // Recovery
+          equityMod = 0.024;
+          globalEquityMod = 0.032;
+          bondMod = 0.003;
+          goldMod = 0.008;
+        }
+      } else if (year === 2021) {
+        // Re-opening trade, massive growth
+        equityMod = 0.016;
+        globalEquityMod = 0.019;
+        bondMod = -0.002;
+        goldMod = -0.005;
+      } else if (year === 2022) {
+        // Inflation spike, interest rate hikes. Both Stocks AND Bonds crashed.
+        equityMod = -0.015;
+        globalEquityMod = -0.017;
+        bondMod = -0.011; // Interest rates rose sharply hurting bonds
+        goldMod = 0.002;
+      } else if (year === 2023) {
+        // Consolidation and steady recovery
+        equityMod = 0.006;
+        globalEquityMod = 0.014;
+        bondMod = 0.004;
+        goldMod = 0.011;
+      } else if (year === 2024) {
+        // Magnificent Bull Run, AI driven, low Swiss inflation
+        equityMod = 0.011;
+        globalEquityMod = 0.018;
+        bondMod = 0.003;
+        goldMod = 0.022; // Gold breakout year
+      } else if (year === 2025) {
+        // Sustained growth, Swiss central bank cuts rates
+        equityMod = 0.009;
+        globalEquityMod = 0.013;
+        bondMod = 0.005; // Rates falling is good for bonds
+        goldMod = 0.014;
+      } else if (year === 2026) {
+        // Soft-landing, consolidation
+        equityMod = 0.005;
+        globalEquityMod = 0.008;
+        bondMod = 0.002;
+        goldMod = 0.015;
+      }
+
+      // Add controlled noise
+      const chspiRet = equityMod + (rand() * 0.03 - 0.015);
+      const cssmiRet = (equityMod * 0.95) + (rand() * 0.028 - 0.014); // Slightly safer/less volatile than small/mid broad
+      const iwdcRet = globalEquityMod + (rand() * 0.035 - 0.0175);
+      const csbgc3Ret = bondMod + (rand() * 0.008 - 0.004);
+      const csgoldRet = goldMod + (rand() * 0.04 - 0.018);
+
+      returnsTable.push({
+        date: monthLabel,
+        CHSPI: chspiRet,
+        CSSMI: cssmiRet,
+        IWDC: iwdcRet,
+        CSBGC3: csbgc3Ret,
+        CSGOLD: csgoldRet
+      });
+    }
+  }
+  return returnsTable;
+};
+
+const MONTHLY_RETURNS_DB = generateHistoricalReturns();
+
+export default function App() {
+  // Input parameters
+  const [initialCapital, setInitialCapital] = useState(50000);
+  const [monthlyAddition, setMonthlyAddition] = useState(500);
+  const [stampDutyExempt, setStampDutyExempt] = useState(false);
+  const [brokerFeePercent, setBrokerFeePercent] = useState(0.09); // 0.09% average SIX Swiss brokerage (e.g., Swissquote/IBKR)
+  const [rebalanceFrequency, setRebalanceFrequency] = useState('annual'); // 'none', 'semi-annual', 'annual'
+
+  // Portfolio allocation state (must sum to 100)
+  const [weights, setWeights] = useState({
+    CHSPI: 40,
+    CSSMI: 10,
+    IWDC: 30,
+    CSBGC3: 15,
+    CSGOLD: 5
+  });
+
+  // Active UI tabs / views
+  const [activeTab, setActiveTab] = useState('backtest'); // 'backtest' | 'tax-insights' | 'advisor'
+  const [selectedEtfInfo, setSelectedEtfInfo] = useState('CHSPI');
+
+  // AI Assistant Chat State
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [aiError, setAiError] = useState('');
+
+  // Hover state for interactive chart tracking
+  const [hoverIndex, setHoverIndex] = useState(null);
+
+  // Validate and handle weight updates
+  const handleWeightChange = (id, value) => {
+    const cleanVal = Math.max(0, Math.min(100, parseInt(value) || 0));
+    setWeights(prev => ({ ...prev, [id]: cleanVal }));
+  };
+
+  // Helper to normalize weights to 100%
+  const normalizeWeights = () => {
+    const total = Object.values(weights).reduce((a, b) => a + b, 0);
+    if (total === 0) {
+      // Equal distribution if clean reset
+      const count = SWISS_ETFS.length;
+      const share = Math.floor(100 / count);
+      const remainder = 100 % count;
+      const newWeights = {};
+      SWISS_ETFS.forEach((etf, i) => {
+        newWeights[etf.id] = share + (i < remainder ? 1 : 0);
+      });
+      setWeights(newWeights);
+      return;
+    }
+    const newWeights = {};
+    let tempSum = 0;
+    const entries = Object.entries(weights);
+    entries.forEach(([key, val], idx) => {
+      if (idx === entries.length - 1) {
+        newWeights[key] = 100 - tempSum;
+      } else {
+        const calculated = Math.round((val / total) * 100);
+        newWeights[key] = calculated;
+        tempSum += calculated;
+      }
+    });
+    setWeights(newWeights);
+  };
+
+  const totalAllocatedWeight = useMemo(() => {
+    return Object.values(weights).reduce((a, b) => a + b, 0);
+  }, [weights]);
+
+  // Strategy Presets Appliers
+  const applyPreset = (preset) => {
+    setWeights({ ...preset.allocations });
+  };
+
+  // Backtest engine simulation run
+  const backtestResults = useMemo(() => {
+    // Return early if weights don't sum to 100%
+    if (totalAllocatedWeight !== 100) {
+      return null;
+    }
+
+    let currentPortfolioValue = initialCapital;
+    let totalSavingsDeposited = initialCapital;
+    let totalBrokerFeesPaid = 0;
+    let totalStampDutiesPaid = 0;
+    let totalExpenseRatiosPaid = 0;
+
+    // Track state of holding each ETF in CHF value
+    let etfHoldings = {};
+    SWISS_ETFS.forEach(etf => {
+      const etfWeight = weights[etf.id] / 100;
+      const amountToInvest = initialCapital * etfWeight;
+      
+      // Stamp duty and Broker cost applied at purchase
+      const buyStampDuty = stampDutyExempt ? 0 : amountToInvest * (etf.stampDutyRate / 100);
+      const buyBrokerFee = amountToInvest * (brokerFeePercent / 100);
+      
+      totalStampDutiesPaid += buyStampDuty;
+      totalBrokerFeesPaid += buyBrokerFee;
+
+      etfHoldings[etf.id] = amountToInvest - (buyStampDuty + buyBrokerFee);
+    });
+
+    const historicalTimeline = [];
+    let peakValue = currentPortfolioValue;
+    let maxDrawdown = 0;
+
+    // Simulate month-by-month
+    MONTHLY_RETURNS_DB.forEach((monthlyData, index) => {
+      let sumValueBeforeInvestments = 0;
+      
+      // 1. Let the invested holdings grow according to index monthly returns
+      SWISS_ETFS.forEach(etf => {
+        const growthRate = monthlyData[etf.id] || 0;
+        etfHoldings[etf.id] = etfHoldings[etf.id] * (1 + growthRate);
+        
+        // 2. Charge the internal ETF management fee (TER) monthly
+        // TER monthly approximation = Yearly TER / 12
+        const monthlyTerRate = (etf.ter / 100) / 12;
+        const terCharge = etfHoldings[etf.id] * monthlyTerRate;
+        etfHoldings[etf.id] -= terCharge;
+        totalExpenseRatiosPaid += terCharge;
+
+        sumValueBeforeInvestments += etfHoldings[etf.id];
+      });
+
+      // 3. Process new cash savings addition (Monthly contributions)
+      const freshCapital = monthlyAddition;
+      totalSavingsDeposited += freshCapital;
+
+      // Split the new addition across the selected allocation weights
+      SWISS_ETFS.forEach(etf => {
+        const weightShare = weights[etf.id] / 100;
+        const addAmount = freshCapital * weightShare;
+        if (addAmount > 0) {
+          const buyStampDuty = stampDutyExempt ? 0 : addAmount * (etf.stampDutyRate / 100);
+          const buyBrokerFee = addAmount * (brokerFeePercent / 100);
+          
+          totalStampDutiesPaid += buyStampDuty;
+          totalBrokerFeesPaid += buyBrokerFee;
+          
+          etfHoldings[etf.id] += addAmount - (buyStampDuty + buyBrokerFee);
+        }
+      });
+
+      // 4. Calculate total post-addition value
+      let monthlyTotalValue = 0;
+      SWISS_ETFS.forEach(etf => {
+        monthlyTotalValue += etfHoldings[etf.id];
+      });
+
+      // 5. Periodic Rebalancing Simulation
+      const shouldRebalance = 
+        (rebalanceFrequency === 'semi-annual' && (index + 1) % 6 === 0) ||
+        (rebalanceFrequency === 'annual' && (index + 1) % 12 === 0);
+
+      if (shouldRebalance) {
+        // Sell outperforming and buy underperforming without extra capital
+        SWISS_ETFS.forEach(etf => {
+          const targetedValue = monthlyTotalValue * (weights[etf.id] / 100);
+          const variance = targetedValue - etfHoldings[etf.id];
+          
+          // Rebalancing transaction fee penalty: we assume broker fee + stamp duty on the modified absolute difference
+          if (Math.abs(variance) > 50) { // minimum threshold to prevent micro-trading
+            const feePenaltyRate = (brokerFeePercent / 100) + (stampDutyExempt ? 0 : (etf.stampDutyRate / 100));
+            const rebalanceCost = Math.abs(variance) * feePenaltyRate;
+            
+            totalBrokerFeesPaid += Math.abs(variance) * (brokerFeePercent / 100);
+            if (!stampDutyExempt) {
+              totalStampDutiesPaid += Math.abs(variance) * (etf.stampDutyRate / 100);
+            }
+            
+            // Adjust holding to target value adjusted for trade friction
+            etfHoldings[etf.id] = targetedValue - rebalanceCost;
+          } else {
+            etfHoldings[etf.id] = targetedValue;
+          }
+        });
+
+        // Recalculate total value after rebalance costs
+        monthlyTotalValue = 0;
+        SWISS_ETFS.forEach(etf => {
+          monthlyTotalValue += etfHoldings[etf.id];
+        });
+      }
+
+      // Max Drawdown tracking
+      if (monthlyTotalValue > peakValue) {
+        peakValue = monthlyTotalValue;
+      }
+      const currentDrawdown = peakValue > 0 ? (peakValue - monthlyTotalValue) / peakValue : 0;
+      if (currentDrawdown > maxDrawdown) {
+        maxDrawdown = currentDrawdown;
+      }
+
+      historicalTimeline.push({
+        date: monthlyData.date,
+        portfolioValue: Math.round(monthlyTotalValue),
+        savingsDeposited: Math.round(totalSavingsDeposited),
+        netGain: Math.round(monthlyTotalValue - totalSavingsDeposited),
+        holdingsSnapshot: { ...etfHoldings }
+      });
+    });
+
+    const finalValue = historicalTimeline[historicalTimeline.length - 1].portfolioValue;
+    const netGain = finalValue - totalSavingsDeposited;
+    
+    // CAGR calculation (Compound Annual Growth Rate)
+    // Jan 2018 to May 2026 is exactly 101 months = 8.416 years
+    const durationInYears = MONTHLY_RETURNS_DB.length / 12;
+    
+    // Formula for CAGR considering external monthly flows is complex;
+    // We compute the Internal Rate of Return (IRR) approximation or simple CAGR of the total ending premium.
+    // To make it standard and useful for comparison, we show the annualized average return:
+    const totalDeposited = totalSavingsDeposited;
+    const rateOfReturnMultiplier = finalValue / totalDeposited;
+    const simpleCagr = (Math.pow(rateOfReturnMultiplier, 1 / durationInYears) - 1) * 100;
+
+    // Cash alternative calculation (if user kept cash in CHF bank account at an average 0.50% interest rate)
+    let cashAltVal = initialCapital;
+    for (let i = 0; i < MONTHLY_RETURNS_DB.length; i++) {
+      cashAltVal = cashAltVal * (1 + 0.005 / 12) + monthlyAddition;
+    }
+
+    return {
+      timeline: historicalTimeline,
+      finalValue,
+      totalDeposited,
+      netGain,
+      simpleCagr: simpleCagr.toFixed(2),
+      maxDrawdown: (maxDrawdown * 100).toFixed(2),
+      totalBrokerFeesPaid: Math.round(totalBrokerFeesPaid),
+      totalStampDutiesPaid: Math.round(totalStampDutiesPaid),
+      totalExpenseRatiosPaid: Math.round(totalExpenseRatiosPaid),
+      frictionTotal: Math.round(totalBrokerFeesPaid + totalStampDutiesPaid + totalExpenseRatiosPaid),
+      cashAlternativeValue: Math.round(cashAltVal),
+      outperformanceVsCash: Math.round(finalValue - cashAltVal)
+    };
+  }, [initialCapital, monthlyAddition, weights, stampDutyExempt, brokerFeePercent, rebalanceFrequency, totalAllocatedWeight]);
+
+  // Combined Portfolio TER calculation
+  const calculatedPortfolioTer = useMemo(() => {
+    let weightedTer = 0;
+    SWISS_ETFS.forEach(etf => {
+      weightedTer += (weights[etf.id] / 100) * etf.ter;
+    });
+    return weightedTer.toFixed(3);
+  }, [weights]);
+
+  // Custom SVG Responsive Multi-Line Graph Chart calculations
+  const chartData = useMemo(() => {
+    if (!backtestResults) return { points: [], maxVal: 0 };
+    const timeline = backtestResults.timeline;
+    const maxVal = Math.max(...timeline.map(d => Math.max(d.portfolioValue, d.savingsDeposited))) * 1.05;
+    const minVal = 0;
+    
+    const width = 800;
+    const height = 300;
+    const padding = 40;
+
+    const points = timeline.map((d, index) => {
+      const x = padding + (index / (timeline.length - 1)) * (width - padding * 2);
+      // Linear scaling
+      const yPortfolio = height - padding - ((d.portfolioValue - minVal) / (maxVal - minVal)) * (height - padding * 2);
+      const ySavings = height - padding - ((d.savingsDeposited - minVal) / (maxVal - minVal)) * (height - padding * 2);
+      return { x, yPortfolio, ySavings, data: d };
+    });
+
+    return { points, maxVal, width, height, padding };
+  }, [backtestResults]);
+
+  // Trigger Gemini AI Consultant Prompt construction and execution
+  const fetchAiAnalysis = async () => {
+    setIsLoadingAi(true);
+    setAiError('');
+    setAiAnalysis('');
+
+    const query = `
+      Please act as a Swiss wealth management advisor and portfolio specialist. 
+      Analyze the following Swiss-domiciled or SIX-traded ETF investment strategy and give an executive summary:
+      
+      - Initial Capital: CHF ${initialCapital}
+      - Monthly Contributions: CHF ${monthlyAddition}
+      - Rebalancing Frequency: ${rebalanceFrequency}
+      - Total Calculated Portfolio TER: ${calculatedPortfolioTer}%
+      - Current Allocations:
+        * ${SWISS_ETFS[0].ticker} (SPI Swiss Broad Equities): ${weights.CHSPI}%
+        * ${SWISS_ETFS[1].ticker} (SMI Swiss Blue-Chips): ${weights.CSSMI}%
+        * ${SWISS_ETFS[2].ticker} (MSCI World CHF Hedged, Ireland Domicile): ${weights.IWDC}%
+        * ${SWISS_ETFS[3].ticker} (Swiss Corporate Bonds): ${weights.CSBGC3}%
+        * ${SWISS_ETFS[4].ticker} (Physically backed Swiss Gold): ${weights.CSGOLD}%
+      
+      Simulation Backtest Metrics (Jan 2018 - May 2026):
+      - Final Portfolio Value: CHF ${backtestResults?.finalValue?.toLocaleString() || 'N/A'}
+      - Cumulative Savings: CHF ${backtestResults?.totalDeposited?.toLocaleString() || 'N/A'}
+      - Estimated Total Drag (Broker Commission, Swiss Stamp Duty, TER): CHF ${backtestResults?.frictionTotal || '0'}
+      - Outperformance relative to CHF Cash savings (0.50% Interest): CHF ${backtestResults?.outperformanceVsCash?.toLocaleString() || 'N/A'}
+      - Maximum Historical Drawdown: ${backtestResults?.maxDrawdown || '0'}%
+      
+      Provide your strategic insights in a crisp, highly professional report structured as follows:
+      1. Allocation Review: Is this portfolio optimally diversified? Address the home-bias ratio (CHF domestic vs world).
+      2. Swiss-Specific Tax Optimizations: Give custom actionable tips about the Swiss withholding tax (Verrechnungssteuer), declaring ETFs in your tax return using Swiss Federal Tax Administration's "ICTax" database, and the impact of the Swiss Federal Stamp Duty (Umsatzabgabe) when rebalancing.
+      3. Actionable Rebalancing Guidance: How does the selected '${rebalanceFrequency}' frequency perform and how can they optimize transactions (e.g., using cash flow additions to rebalance instead of selling to minimize Swiss stamp duty costs).
+    `;
+
+    // Implement exponential backoff for API Call
+    let retries = 5;
+    let delay = 1000;
+    const apiKey = ""; // Set blank, environment supplies it in runtime
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+    const payload = {
+      contents: [{ parts: [{ text: query }] }],
+      systemInstruction: {
+        parts: [{ text: "You are an elite financial advisor specializing in Swiss wealth management regulations, Swiss taxes, and SIX Swiss exchange-traded products. Your tone is professional, analytical, objective, and clear." }]
+      }
+    };
+
+    const callApi = async (attempt) => {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP status ${response.status}`);
+        }
+
+        const data = await response.json();
+        const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (textResponse) {
+          setAiAnalysis(textResponse);
+          setIsLoadingAi(false);
+        } else {
+          throw new Error("Could not parse a valid candidate text output from Gemini response.");
+        }
+      } catch (err) {
+        if (attempt < retries) {
+          setTimeout(() => {
+            callApi(attempt + 1);
+          }, delay);
+          delay *= 2; // exponential increase
+        } else {
+          setAiError(`Unable to complete professional Swiss advisory consult: ${err.message}. Please check back in a moment.`);
+          setIsLoadingAi(false);
+        }
+      }
+    };
+
+    callApi(1);
+  };
+
+  // Run AI analysis on mount if backtest results are ready, or on request
+  useEffect(() => {
+    if (backtestResults && !aiAnalysis && !isLoadingAi) {
+      fetchAiAnalysis();
+    }
+  }, [backtestResults]);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased flex flex-col selection:bg-red-500/20 selection:text-red-300">
+      
+      {/* Premium Top Navigation Bar */}
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <div className="bg-gradient-to-br from-red-600 to-red-700 p-2.5 rounded-xl shadow-lg border border-red-500/30 flex items-center justify-center">
+            <span className="text-white font-bold text-lg tracking-tight">CH</span>
+          </div>
+          <div>
+            <h1 className="font-extrabold text-xl tracking-wide bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent">
+              Swissvest ETF Backtest
+            </h1>
+            <p className="text-xs text-slate-400 font-medium tracking-normal flex items-center">
+              <span>Swiss Exchange Strategy Engine</span>
+              <span className="mx-2 text-slate-600">•</span>
+              <span className="text-red-400">SIX Domiciled Assets</span>
+            </p>
+          </div>
+        </div>
+
+        {/* Currency status indicator */}
+        <div className="flex items-center space-x-6">
+          <div className="hidden sm:flex items-center space-x-2 bg-slate-950/60 px-4 py-2 rounded-lg border border-slate-800">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="text-xs text-slate-300 font-bold">Base Currency: CHF</span>
+          </div>
+          <button 
+            onClick={() => {
+              setInitialCapital(50000);
+              setMonthlyAddition(500);
+              setWeights({ CHSPI: 40, CSSMI: 10, IWDC: 30, CSBGC3: 15, CSGOLD: 5 });
+            }}
+            className="p-2 bg-slate-800 hover:bg-slate-700 hover:text-white transition rounded-lg text-slate-400 border border-slate-700 flex items-center space-x-1.5 text-xs font-semibold"
+            title="Reset to default settings"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span className="hidden md:inline">Reset Workspace</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Main Container Layout */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Left Column - Strategy Control Cockpit (5 grid units) */}
+        <section className="lg:col-span-5 flex flex-col space-y-6">
+          
+          {/* Card 1: Fund Allocation Weights */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl transition-all duration-300 hover:border-slate-700/80">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-2">
+                <Sliders className="w-5 h-5 text-red-500" />
+                <h2 className="font-bold text-slate-100 tracking-wide text-lg">ETF Asset Allocation</h2>
+              </div>
+              <span className={`text-xs px-2.5 py-1 rounded-full font-bold transition-colors ${
+                totalAllocatedWeight === 100 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                  : 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse'
+              }`}>
+                {totalAllocatedWeight}% allocated
+              </span>
+            </div>
+
+            {/* Presets Quick Picker */}
+            <div className="mb-5 bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+              <label className="text-xs font-bold text-slate-400 block mb-2 tracking-wider uppercase">Strategic Swiss Presets</label>
+              <div className="grid grid-cols-2 gap-2">
+                {STRATEGY_PRESETS.map((preset) => {
+                  const isActive = Object.keys(preset.allocations).every(
+                    key => weights[key] === preset.allocations[key]
+                  );
+                  return (
+                    <button
+                      key={preset.name}
+                      onClick={() => applyPreset(preset)}
+                      className={`text-left p-2 rounded-lg border text-xs transition-all ${
+                        isActive 
+                          ? 'bg-red-600/10 border-red-500 text-red-200 shadow-md font-semibold' 
+                          : 'bg-slate-900 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <div className="truncate font-semibold">{preset.name}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ETF Allocation Sliders list */}
+            <div className="space-y-4">
+              {SWISS_ETFS.map((etf) => {
+                const w = weights[etf.id] || 0;
+                return (
+                  <div key={etf.id} className="p-3 bg-slate-950/40 rounded-xl border border-slate-800 hover:border-slate-700/60 transition">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: etf.color }} />
+                        <span className="font-bold text-xs text-white truncate">{etf.ticker}</span>
+                        <span className="text-[10px] text-slate-500 truncate hidden sm:inline">{etf.name}</span>
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <input
+                          type="number"
+                          value={w}
+                          onChange={(e) => handleWeightChange(etf.id, e.target.value)}
+                          className="w-12 bg-slate-900 border border-slate-800 rounded-md py-0.5 px-1.5 text-center text-xs font-extrabold focus:outline-none focus:border-red-500 text-slate-200"
+                          min="0"
+                          max="100"
+                        />
+                        <span className="text-xs text-slate-500 font-semibold">%</span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center space-x-3">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={w}
+                        onChange={(e) => handleWeightChange(etf.id, e.target.value)}
+                        className="flex-1 accent-red-600 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center mt-1 text-[10px] text-slate-500 font-medium">
+                      <span>TER: {etf.ter}% ({etf.domicile})</span>
+                      <button 
+                        onClick={() => setSelectedEtfInfo(etf.id)} 
+                        className="text-red-400 hover:underline flex items-center space-x-0.5"
+                      >
+                        <Info className="w-3 h-3" />
+                        <span>Specs</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Error correction/normalizer row */}
+            {totalAllocatedWeight !== 100 && (
+              <div className="mt-4 p-3 bg-red-950/20 border border-red-900/40 rounded-xl flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <AlertTriangle className="w-4.5 h-4.5 text-red-500 flex-shrink-0" />
+                  <span className="text-xs text-red-300 font-medium">
+                    Allocations must sum to 100% (currently {totalAllocatedWeight}%).
+                  </span>
+                </div>
+                <button
+                  onClick={normalizeWeights}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 transition rounded text-white text-[11px] font-bold shadow-md shadow-red-950"
+                >
+                  Auto-Balance
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Card 2: Strategy Parameters & Transaction Friction */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl transition-all duration-300 hover:border-slate-700/80">
+            <div className="flex items-center space-x-2 mb-4">
+              <Settings className="w-5 h-5 text-red-500" />
+              <h2 className="font-bold text-slate-100 tracking-wide text-lg">Backtest Parameters</h2>
+            </div>
+
+            <div className="space-y-4">
+              {/* Initial Capital & Monthly Additions */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wide block mb-1.5">Initial Capital</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-slate-500 text-xs font-bold">CHF</span>
+                    <input
+                      type="number"
+                      value={initialCapital}
+                      onChange={(e) => setInitialCapital(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-red-500 text-slate-200 rounded-xl py-2 pl-11 pr-3 text-sm font-bold focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wide block mb-1.5">Monthly Addition</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-slate-500 text-xs font-bold">CHF</span>
+                    <input
+                      type="number"
+                      value={monthlyAddition}
+                      onChange={(e) => setMonthlyAddition(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-red-500 text-slate-200 rounded-xl py-2 pl-11 pr-3 text-sm font-bold focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Rebalance Frequency Picker */}
+              <div>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wide block mb-1.5">Rebalance Frequency</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { key: 'none', label: 'No Rebalance' },
+                    { key: 'semi-annual', label: 'Semi-Annually' },
+                    { key: 'annual', label: 'Annually' }
+                  ].map((option) => (
+                    <button
+                      key={option.key}
+                      onClick={() => setRebalanceFrequency(option.key)}
+                      className={`py-1.5 px-2 text-xs border rounded-lg font-bold text-center transition ${
+                        rebalanceFrequency === option.key
+                          ? 'bg-red-600/10 border-red-500 text-red-200'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Swiss Broker Fee percentage */}
+              <div className="pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">SIX Swiss Broker Commission</span>
+                  <span className="text-xs text-red-400 font-bold">{brokerFeePercent}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.01"
+                  max="0.50"
+                  step="0.01"
+                  value={brokerFeePercent}
+                  onChange={(e) => setBrokerFeePercent(parseFloat(e.target.value))}
+                  className="w-full accent-red-600 bg-slate-800 h-1 rounded-lg cursor-pointer"
+                />
+                <p className="text-[10px] text-slate-500 mt-1 leading-normal">
+                  Friction applied to new purchases and rebalancing events (Typical Swiss broker fee structure).
+                </p>
+              </div>
+
+              {/* Swiss Stamp Duty Exemption Switcher */}
+              <div className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-300">Exempt Stamp Duty</h4>
+                  <p className="text-[10px] text-slate-500 leading-normal">Assume special institution/3rd pillar exemption.</p>
+                </div>
+                <button
+                  onClick={() => setStampDutyExempt(!stampDutyExempt)}
+                  className={`w-11 h-6 rounded-full p-1 transition-colors duration-200 focus:outline-none ${
+                    stampDutyExempt ? 'bg-red-600' : 'bg-slate-800'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                    stampDutyExempt ? 'transform translate-x-5' : ''
+                  }`} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Right Column - Results Dashboard & Graph Interface (7 grid units) */}
+        <section className="lg:col-span-7 flex flex-col space-y-6">
+
+          {/* Navigation tabs */}
+          <div className="flex border-b border-slate-800 bg-slate-900/50 p-1.5 rounded-xl">
+            <button
+              onClick={() => setActiveTab('backtest')}
+              className={`flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition ${
+                activeTab === 'backtest'
+                  ? 'bg-red-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              <span>Performance Backtest</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('tax-insights')}
+              className={`flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition ${
+                activeTab === 'tax-insights'
+                  ? 'bg-red-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Coins className="w-4 h-4" />
+              <span>Swiss Tax Sandbox</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('advisor')}
+              className={`flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center space-x-2 transition relative ${
+                activeTab === 'advisor'
+                  ? 'bg-red-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>AI Advisor Desk</span>
+              <span className="absolute -top-1 right-2 bg-gradient-to-r from-amber-400 to-red-500 text-[8px] text-slate-950 font-extrabold px-1.5 py-0.2 rounded-full shadow-lg border border-red-300/30">
+                ACTIVE
+              </span>
+            </button>
+          </div>
+
+          {/* Tab Content 1: Backtesting Performance Graphs & Analytics */}
+          {activeTab === 'backtest' && (
+            <>
+              {totalAllocatedWeight !== 100 ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 flex flex-col items-center justify-center text-center">
+                  <div className="bg-amber-500/10 p-4 rounded-full border border-amber-500/20 mb-4 text-amber-400">
+                    <ShieldAlert className="w-10 h-10" />
+                  </div>
+                  <h3 className="font-bold text-slate-100 text-lg">Allocation Adjustment Required</h3>
+                  <p className="text-slate-400 text-sm max-w-sm mt-1 leading-relaxed">
+                    Please balance your portfolio to sum up to exactly 100% on the left panel to execute the Swiss historical backtest engine.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Performance Key Indicators Grid */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Final Value</span>
+                      <span className="text-lg md:text-xl font-extrabold text-white">
+                        CHF {backtestResults?.finalValue?.toLocaleString() || '0'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Net Profits</span>
+                      <span className={`text-lg md:text-xl font-extrabold ${backtestResults?.netGain >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        CHF {backtestResults?.netGain?.toLocaleString() || '0'}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Est. CAGR</span>
+                      <span className="text-lg md:text-xl font-extrabold text-red-400">
+                        {backtestResults?.simpleCagr}%
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Max Drawdown</span>
+                      <span className="text-lg md:text-xl font-extrabold text-amber-400">
+                        -{backtestResults?.maxDrawdown}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* High Fidelity SVG Interactive Chart */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="font-bold text-slate-200 text-sm">Equity Growth Curve (2018 - 2026)</h3>
+                        <p className="text-[10px] text-slate-400">Comparing your customized ETF allocation against simple cash deposits.</p>
+                      </div>
+                      
+                      <div className="flex space-x-4 text-xs font-semibold">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="w-3 h-1 bg-red-500 rounded-full inline-block"></span>
+                          <span className="text-slate-300">Portfolio</span>
+                        </div>
+                        <div className="flex items-center space-x-1.5">
+                          <span className="w-3 h-1 bg-slate-600 rounded-full inline-block"></span>
+                          <span className="text-slate-400">Invested Capital</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SVG Graphic Container */}
+                    <div className="relative">
+                      <svg 
+                        className="w-full h-auto overflow-visible" 
+                        viewBox={`0 0 ${chartData.width} ${chartData.height}`}
+                        onMouseLeave={() => setHoverIndex(null)}
+                        onMouseMove={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const xPos = ((e.clientX - rect.left) / rect.width) * chartData.width;
+                          // Find closest point index in array
+                          const index = Math.round(((xPos - chartData.padding) / (chartData.width - chartData.padding * 2)) * (chartData.points.length - 1));
+                          if (index >= 0 && index < chartData.points.length) {
+                            setHoverIndex(index);
+                          }
+                        }}
+                      >
+                        {/* Grid lines */}
+                        {[0, 0.25, 0.5, 0.75, 1].map((p, i) => {
+                          const y = chartData.padding + p * (chartData.height - chartData.padding * 2);
+                          const val = Math.round(chartData.maxVal - p * chartData.maxVal);
+                          return (
+                            <g key={i}>
+                              <line 
+                                x1={chartData.padding} 
+                                y1={y} 
+                                x2={chartData.width - chartData.padding} 
+                                y2={y} 
+                                stroke="#1e293b" 
+                                strokeWidth="1" 
+                                strokeDasharray="3,3" 
+                              />
+                              <text 
+                                x={chartData.padding - 5} 
+                                y={y + 3} 
+                                fill="#64748b" 
+                                fontSize="10" 
+                                textAnchor="end"
+                                className="font-bold"
+                              >
+                                {val >= 1000 ? `${(val/1000).toFixed(0)}k` : val}
+                              </text>
+                            </g>
+                          );
+                        })}
+
+                        {/* Safe cash savings path line */}
+                        <path
+                          d={chartData.points.map(p => `${p.x},${p.ySavings}`).reduce((acc, current, i) => i === 0 ? `M ${current}` : `${acc} L ${current}`, '')}
+                          fill="none"
+                          stroke="#475569"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                        />
+
+                        {/* Portfolio values path line */}
+                        <path
+                          d={chartData.points.map(p => `${p.x},${p.yPortfolio}`).reduce((acc, current, i) => i === 0 ? `M ${current}` : `${acc} L ${current}`, '')}
+                          fill="none"
+                          stroke="#E31B23"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                        />
+
+                        {/* Crosshair indicator when hovering */}
+                        {hoverIndex !== null && chartData.points[hoverIndex] && (
+                          <g>
+                            <line 
+                              x1={chartData.points[hoverIndex].x} 
+                              y1={chartData.padding} 
+                              x2={chartData.points[hoverIndex].x} 
+                              y2={chartData.height - chartData.padding} 
+                              stroke="#64748b" 
+                              strokeWidth="1.5" 
+                              strokeDasharray="2,2" 
+                            />
+                            <circle 
+                              cx={chartData.points[hoverIndex].x} 
+                              cy={chartData.points[hoverIndex].yPortfolio} 
+                              r="6" 
+                              fill="#E31B23" 
+                              stroke="#ffffff" 
+                              strokeWidth="2" 
+                            />
+                            <circle 
+                              cx={chartData.points[hoverIndex].x} 
+                              cy={chartData.points[hoverIndex].ySavings} 
+                              r="5" 
+                              fill="#475569" 
+                              stroke="#ffffff" 
+                              strokeWidth="1.5" 
+                            />
+                          </g>
+                        )}
+                      </svg>
+
+                      {/* Interactive Hover Tooltip Box */}
+                      {hoverIndex !== null && chartData.points[hoverIndex] && (
+                        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-slate-700 p-3.5 rounded-xl shadow-2xl flex flex-col space-y-1 w-60 z-20 pointer-events-none">
+                          <div className="text-xs font-black text-slate-300 border-b border-slate-800 pb-1 mb-1">
+                            {chartData.points[hoverIndex].data.date}
+                          </div>
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>Portfolio Value:</span>
+                            <span className="font-extrabold text-white">CHF {chartData.points[hoverIndex].data.portfolioValue.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>Invested Capital:</span>
+                            <span className="font-bold text-slate-300">CHF {chartData.points[hoverIndex].data.savingsDeposited.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>Total Net Profit:</span>
+                            <span className={`font-bold ${chartData.points[hoverIndex].data.netGain >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              CHF {chartData.points[hoverIndex].data.netGain.toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Timeline labels beneath chart */}
+                    <div className="flex justify-between items-center mt-2 px-10 text-[9px] font-bold text-slate-500 uppercase tracking-wide">
+                      <span>Jan 2018</span>
+                      <span>Mid 2020</span>
+                      <span>Jan 2022</span>
+                      <span>Jan 2024</span>
+                      <span>May 2026</span>
+                    </div>
+                  </div>
+
+                  {/* ETF Specs Explorer Sheet */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                    <h3 className="font-bold text-slate-200 text-sm mb-3">Constituent Fund Explorer</h3>
+                    <div className="grid grid-cols-5 gap-2 mb-4">
+                      {SWISS_ETFS.map((etf) => (
+                        <button
+                          key={etf.id}
+                          onClick={() => setSelectedEtfInfo(etf.id)}
+                          className={`py-2 px-1 text-center border rounded-xl font-bold text-xs transition ${
+                            selectedEtfInfo === etf.id
+                              ? 'bg-red-600/10 border-red-500 text-red-200 shadow-md'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                          }`}
+                        >
+                          {etf.ticker}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Selected Fund Technical Specs */}
+                    {(() => {
+                      const etf = SWISS_ETFS.find(e => e.id === selectedEtfInfo);
+                      if (!etf) return null;
+                      return (
+                        <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800">
+                            <div>
+                              <span className="text-[10px] font-extrabold uppercase bg-red-600/10 text-red-400 border border-red-500/20 px-2 py-0.5 rounded-full mr-2">
+                                {etf.assetClass}
+                              </span>
+                              <span className="font-black text-white text-sm tracking-wide">{etf.name}</span>
+                            </div>
+                            <span className="text-xs text-slate-400 font-mono">ISIN: {etf.isin}</span>
+                          </div>
+                          <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                            {etf.description}
+                          </p>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-semibold">
+                            <div>
+                              <span className="text-[10px] text-slate-500 block">Expense Ratio (TER)</span>
+                              <span className="text-slate-300">{etf.ter}% per annum</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-500 block">Swiss Stamp Duty</span>
+                              <span className="text-slate-300">{etf.stampDutyRate}% trade fee</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-500 block">Domicile</span>
+                              <span className="text-slate-300">{etf.domicile}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-500 block">Exchange</span>
+                              <span className="text-slate-300">SIX Swiss Exchange</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Tab Content 2: Swiss Tax Optimization SandBox */}
+          {activeTab === 'tax-insights' && (
+            <div className="space-y-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                <div className="flex items-center space-x-2.5 mb-3 border-b border-slate-800 pb-3">
+                  <Coins className="w-5 h-5 text-red-500" />
+                  <h3 className="font-bold text-slate-100 text-lg">Swiss Investment Friction Modeler</h3>
+                </div>
+                
+                <p className="text-xs text-slate-400 leading-relaxed mb-4">
+                  Investing directly from Switzerland entails distinct tax regulations and transfer frictions. This dashboard models how expenses impact your returns over the simulated 101-month timeline.
+                </p>
+
+                {/* Simulated Friction Grid */}
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Total Broker Commission</span>
+                    <span className="text-lg font-extrabold text-white">CHF {backtestResults?.totalBrokerFeesPaid}</span>
+                    <span className="text-[9px] text-slate-500 block mt-1">At {brokerFeePercent}% rate</span>
+                  </div>
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Swiss Federal Stamp Duty</span>
+                    <span className="text-lg font-extrabold text-white">CHF {backtestResults?.totalStampDutiesPaid}</span>
+                    <span className="text-[9px] text-slate-500 block mt-1">Swiss vs Irish domicile</span>
+                  </div>
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Accumulated Fund TER</span>
+                    <span className="text-lg font-extrabold text-white">CHF {backtestResults?.totalExpenseRatiosPaid}</span>
+                    <span className="text-[9px] text-slate-500 block mt-1">Avg Ter: {calculatedPortfolioTer}%</span>
+                  </div>
+                </div>
+
+                {/* Swiss Tax Insights Information Cards */}
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <div className="w-2.5 h-2.5 rounded-full bg-red-600"></div>
+                      <h4 className="text-xs font-extrabold text-slate-200">The Swiss Stamp Duty (Umsatzabgabe)</h4>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed pl-4">
+                      Switzerland levies a Federal Stamp Duty on the purchase and sale of securities through Swiss brokers. For Swiss-domiciled ETFs (like <span className="text-slate-200">CHSPI</span>, <span className="text-slate-200">CSSMI</span>) the rate is <span className="text-slate-200">0.075%</span>. For foreign-domiciled ETFs (like <span className="text-slate-200">IWDC</span> out of Ireland) it spikes to <span className="text-slate-200">0.15%</span>. Selecting Swiss-domiciled core funds significantly dampens trade drag.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
+                      <h4 className="text-xs font-extrabold text-slate-200">Withholding Tax (Verrechnungssteuer) & DA-1</h4>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed pl-4">
+                      Dividends on Swiss equities undergo a 35% withholding tax, fully reimbursable upon proper local tax declaration. For US assets contained in global funds, using US-domiciled ETFs requires filing a <span className="text-slate-200">Form DA-1</span> to claim back the 15% non-refundable US withholding tax, whereas Irish UCITS alternatives internally minimize this leakage.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
+                      <h4 className="text-xs font-extrabold text-slate-200">Swiss "ICTax" Tax Values (Estv)</h4>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed pl-4">
+                      Capital gains are generally tax-free in Switzerland for private retail investors (who are not classified as professional traders). However, dividends and physical yield distributions count as taxable income. To prevent double taxation and claim back withholding fees, you must search and match your specific ISIN values on the official federal ICTax database when filing taxes.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cash comparison and outperformance statistics */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                <h3 className="font-bold text-slate-200 text-sm mb-3">Hypothetical Savings Account vs ETF Strategy</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <span className="text-[10px] text-slate-500 block uppercase font-bold">CHF Cash (Average 0.50% yield)</span>
+                    <span className="text-lg font-black text-slate-400">CHF {backtestResults?.cashAlternativeValue?.toLocaleString()}</span>
+                  </div>
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                    <span className="text-[10px] text-slate-500 block uppercase font-bold">Portfolio Strategy Outperformance</span>
+                    <span className="text-lg font-black text-emerald-400">CHF +{backtestResults?.outperformanceVsCash?.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tab Content 3: Professional AI Advisor Consultation Desk */}
+          {activeTab === 'advisor' && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center space-x-2">
+                  <Sparkles className="w-5 h-5 text-amber-300" />
+                  <h3 className="font-bold text-slate-100 text-lg">AI Wealth Desk Analyst</h3>
+                </div>
+                <button
+                  onClick={fetchAiAnalysis}
+                  disabled={isLoadingAi}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 transition rounded-xl text-xs font-bold text-slate-200 border border-slate-700 flex items-center space-x-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAi ? 'animate-spin' : ''}`} />
+                  <span>Re-Generate Memo</span>
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-400 leading-relaxed">
+                This digital consultant runs analytical reviews using real-time details from your custom inputs. Tap below to build suggestions based on Swiss domestic market biases, stamp taxes, and withholding benefits.
+              </p>
+
+              {/* Error warning box */}
+              {aiError && (
+                <div className="p-3 bg-red-950/30 border border-red-900/40 rounded-xl text-xs text-red-300 flex items-center space-x-2">
+                  <AlertTriangle className="w-4.5 h-4.5 text-red-400 flex-shrink-0" />
+                  <span>{aiError}</span>
+                </div>
+              )}
+
+              {/* Generated text preview field */}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 min-h-[250px] relative overflow-y-auto max-h-[400px]">
+                {isLoadingAi ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3 bg-slate-950/80">
+                    <div className="w-7 h-7 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-xs text-slate-400 font-bold tracking-wider animate-pulse">Consulting Swiss Wealth Specialist...</span>
+                  </div>
+                ) : aiAnalysis ? (
+                  <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-line space-y-4">
+                    {/* Render AI findings beautifully formatted */}
+                    {aiAnalysis}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-center p-6 h-full text-slate-500">
+                    <Sparkles className="w-8 h-8 text-slate-600 mb-2" />
+                    <p className="text-xs">No analysis computed yet. Click "Re-Generate Memo" above to launch.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Informative Disclaimer */}
+              <div className="p-3.5 bg-slate-950/40 rounded-xl border border-slate-800 text-[10px] text-slate-500 leading-normal">
+                <span className="font-extrabold text-slate-400">Regulatory Disclaimer:</span> Past performance models do not guarantee future performance results. Calculations are simulated approximations for educational analysis. This dashboard is not formal independent legal, tax, or financial investment advice under the Swiss Financial Services Act (FIDLEG). Consult licensed tax professionals regarding individual filing returns.
+              </div>
+            </div>
+          )}
+
+        </section>
+
+      </main>
+
+      {/* Modern Minimalistic Swiss Footer */}
+      <footer className="mt-auto border-t border-slate-800 bg-slate-900/50 py-4 px-6 text-center text-xs text-slate-500 font-medium">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span>© 2026 Swissvest ETF Strategies AG. Developed for SIX Exchange Trades.</span>
+          <span className="flex items-center space-x-1">
+            <span className="w-2 h-2 rounded-full bg-red-600"></span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">Swiss Financial Integrity Standard</span>
+          </span>
+        </div>
+      </footer>
+
+    </div>
+  );
+}
